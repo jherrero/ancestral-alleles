@@ -6,44 +6,77 @@ use BaseAncestralAlleles;
 
 use base ('Bio::EnsEMBL::Hive::Process');
 
+=pod
 
-###############################################
-##
-## DATA STRUCTURES
-##
-###############################################
-##
-## SORTED_ALIGNMENT
-##
-## This is used for the original and sub-EMF alignments. It is a hash with 3 keys:
-## - tree:      a string representation of the sequence tree, with no names for the ancestral sequences
-## - positions: defines the order of the sequences in the tree (required for running Ortheus)
-## - sequences: a sorted array (see positions) of hashes whose keys are:
-##      - species:  the species name
-##      - chr:      the chromosome (or similar) name
-##      - start:    the start position in that chromosome (e! coordinates)
-##      - end:      the end position in that chromosomes (e! coordinates)
-##      - strand:   the strand of the sequence (1 or -1)
-##      - name:     a label representation of the above, as found in the tree lines of the EMF files (i.e. Hsap_1_12345_22345[+])
-##      - aligned_sequence:     self-explanatory. Might not exist if the sequence is to be aligned.
-##      - original_sequence:    self-explanatory. Might not exist if the sequence is already aligned.
-##
-###############################################
-##
-## ORTHEUS_ALIGNMENT
-##
-## This is used for capturing the Ortheus alignments. It is a hash, where each entry is one of the sequences from Ortheus.
-## The key is the name of the sequence "a la Ortheus" (concatenation of the sequence numbers with an "_"), but with sorted
-## leave names. Additionally, the parser also calls "ref", "sis", "anc" and "old" as aliases for the corresponding sequences.
-## The values are a hash whose keys are:
-## - leaves:            a hash with keys being the leaf names and values being simply 1. Useful to match leaf content.
-## - num_leaves:        the number of leaves under that tree. 1 for leaves, more for ancestral nodes.
-## - aligned_sequence:  self-explanatory
-## - name:              the same label as for the SORTED_ALIGNMENT for leaves. Concatenation of labels these otherwise.
-##
-## Note: after the calling of alleles, the ortheus_alignment contain a new key-value pair with the lengths of the flank5, allele and flank3
-##
-###############################################
+=head1 MODULE
+
+RunAncestralAllelesOnEMF
+
+=head1 SYNOPSYS
+
+standaloneJob.pl RunAncestralAllelesOnEMF.pm --emf emf/Compara.6_primates_EPO.chr1_1.emf.gz -vcf indel_vcfs/AA.chr1.indels.vcf -out AA.chr1_1.txt
+
+=head1 DESCRIPTION
+
+This module can be used to polarise indels in a genome. It uses a pre-existing whole genome multiple alignment in EMF format
+as input. For each tested position, this software extracts the flanking region from the alignment in the EMF file, uses
+Ortheus to align the other sequences to the reference allele and to the alternate allele independently. Ortheus predicts
+ancestral sequences. If both alignments suggest the same ancestral state for that position, this is inferred as the predicted
+ancestral allele for this indel. Based on this, the indel can be polarised as either an insertion or a deletion (w.r.t. the
+ancestral sequence).
+
+For a correct handling of homopolymer runs, the software extends the concept of the reference and alternate alleles to the
+whole homopolymer.
+
+=head1 FILE FORMATS
+
+=head2 EMF file
+
+This is an EMF (Ensembl Multi-Format) file. You can find them in the Ensembl FTP server, under the ensembl-compara section. A whole-genome multiple alignment is described in columns (each column represents an aligned sequence). Additional data for each alignment block provide a tree structure that relates to the phylogenetic relationship among the sequences.
+
+=head2 VCF file
+
+A file describing the variants to be analysed
+
+=head2 OUTPUT file
+
+A text file containing all the predictions for a given position in a single line. The output is meant to be indexed with tabix for use with the VEP plugin
+
+=head1 INTERNAL DATA STRUCTURES
+
+=head2 SORTED_ALIGNMENT
+
+ This is used for the original and sub-EMF alignments. It is a hash with 3 keys:
+ - tree:      a string representation of the sequence tree, with no names for the ancestral sequences
+ - positions: defines the order of the sequences in the tree (required for running Ortheus)
+ - sequences: a sorted array (see positions) of hashes whose keys are:
+      - species:  the species name
+      - chr:      the chromosome (or similar) name
+      - start:    the start position in that chromosome (e! coordinates)
+      - end:      the end position in that chromosomes (e! coordinates)
+      - strand:   the strand of the sequence (1 or -1)
+      - name:     a label representation of the above, as found in the tree lines of the EMF files (i.e. Hsap_1_12345_22345[+])
+      - aligned_sequence:     self-explanatory. Might not exist if the sequence is to be aligned.
+      - original_sequence:    self-explanatory. Might not exist if the sequence is already aligned.
+
+=head2 ORTHEUS_ALIGNMENT
+
+ This is used for capturing the Ortheus alignments. It is a hash, where each entry is one of the sequences from Ortheus.
+ The key is the name of the sequence "a la Ortheus" (concatenation of the sequence numbers with an "_"), but with sorted
+ leave names. Additionally, the parser also calls "ref", "sis", "anc" and "old" as aliases for the corresponding sequences.
+ The values are a hash whose keys are:
+ - leaves:            a hash with keys being the leaf names and values being simply 1. Useful to match leaf content.
+ - num_leaves:        the number of leaves under that tree. 1 for leaves, more for ancestral nodes.
+ - aligned_sequence:  self-explanatory
+ - name:              the same label as for the SORTED_ALIGNMENT for leaves. Concatenation of labels these otherwise.
+
+ Note: after the calling of alleles, the ortheus_alignment contain a new key-value pair with the lengths of the flank5, allele and flank3
+
+=head1 INTERNAL METHODS
+
+The rest of the documentation refers to the internal methods implemented in this module.
+
+=cut
 
 
 #Set of bases to insert to the left of the current base
@@ -58,6 +91,22 @@ my $inserts;
 my %event_type = %BaseAncestralAlleles::event_type;
 
 
+=head2 param_defaults
+
+This method implements the param_defaults interface for the eHive system.
+
+It defines default values for some of the options. Namely:
+
+  'flank'                 => 10,
+  'max_alignment_length'  => 100,
+  'ortheus_exe'           => "ortheus_core",
+  'nuc_frequency'         => "0.3 0.2 0.2 0.3", # Used for -n option in Ortheus (seems like not in use any longer)
+  'verbose'               => 0,
+  'muscle_exe'            => 0,
+
+
+=cut
+
 sub param_defaults {
     
     return {
@@ -69,6 +118,26 @@ sub param_defaults {
         'muscle_exe'            => 0,
     }
 }
+
+=head2 fetch_input
+
+This method implements the fetch_input interface for the eHive system.
+
+Fetch_input copies the EMF file (param 'emf') to the worker_temp_directory, uncompressing the file with gunzip or bunzip2 if necessary.
+
+If a VCF file is provided (param 'vcf'), it reads the positions of the VCF file and store them in the param 'positions', a
+hashref of positions by chromosome, e.g. $positions->{$chromosome}->{$position} = 1. Note that the position stored in the hash
+is the one just after the start position in the VCF file as VCF indels are located on the bp 5' from the indel (to give
+context to the indel).
+
+If the single_position option is used (param 'single_position'), this method reads this instead.
+
+The method also reads the ancestral sequence for one chromosome (param 'anc'). It is important that this contains only one
+chromosome sequence. This information is used to extract the predicted AA for SNPs or point mutations.
+
+Lastly, the method open the output file (param 'out') if defined. Otherwise, the predictions will be printed to standard output.
+
+=cut
 
 sub fetch_input {
     my $self = shift @_;
@@ -145,6 +214,17 @@ sub fetch_input {
     $self->param("emf", $emf_file);
 }
 
+
+=head2 run
+
+This method implements the run interface for the eHive system.
+
+This method read the EMF file (param 'emf') and sends each block in turn to the
+infer_ancestral_alleles_for_this_sorted_alignment method, after fixing the alignment tree
+with the fix_alignment_tree method.
+
+=cut
+
 sub run {
     my $self = shift @_;
     
@@ -209,6 +289,16 @@ sub run {
     }
 }
 
+
+=head2 write_output
+
+This method implements the write_output interface for the eHive system.
+
+As it is more efficient to write the output during the execution of the program, this method only closes the output
+file (param 'out') if required.
+
+=cut
+
 sub write_output {
     my $self = shift @_;
 
@@ -218,6 +308,17 @@ sub write_output {
 
 }
 
+
+=head2 fix_alignment_tree
+
+This method modifies the tree string extracted from the EMF file. It also capture the order in which the sequences are
+listed on the tree. This is required by Ortheus as it relies on the order of the input files matching the order of the
+leaves in the input tree.
+
+The modified tree is stored back in the $sorted_alignment->{tree} variable and a new variable ($sorted_alignment->{positions})
+contains an array with the positions of each sequence in the tree string.
+
+=cut
 
 sub fix_alignment_tree {
     my ($sorted_alignment) = @_;
@@ -235,6 +336,40 @@ sub fix_alignment_tree {
     
     $sorted_alignment->{positions} = \@positions;
 }
+
+
+=head2 infer_ancestral_alleles_for_this_sorted_alignment
+
+This is the method that does the hard work. It is called by the run method for each EMF block. Note that it is generic
+enough that it could be used for MAF blocks instead, provided that the run method can parse these.
+
+For each position in the block, the method:
+
+=over
+
+=item extracts the flanking region (param 'flank', each side of the position),
+
+=item extracts the AA for the SNPs from the ancestral_alleles file (param 'anc')
+
+=item tests whether the context of the position is suitable for this analysis by using the get_reference_sequence_exception from the BaseAncestralAlleles module
+
+=item extracts the sub-alignment for the position+flanks
+
+=item splice_uninformative_sequences_from_alignment
+
+=item tests whether the are still other sequence left after that
+
+=item run Ortheus for the reference allele
+
+=item run Ortheus for each alternate allele and call the ancestral state accordingly
+
+=back
+
+Running ortheus and calling the ancestral states is performed by the corresponding methods in the BaseAncestralAlleles module.
+
+The result is printed on the output file (param 'out') or on the standard output
+
+=cut
 
 sub infer_ancestral_alleles_for_this_sorted_alignment {
     my ($self, $sorted_alignment) = @_;
@@ -306,38 +441,13 @@ sub infer_ancestral_alleles_for_this_sorted_alignment {
 
         $pre_start += length(($flank5 =~ /([a-zA-Z]\-*)/)[0]);
 
-        ## TODO
-        ## TODO: Add AA for point mutations
-        ## TODO
-        ## TODO
-        ## TODO
-        ## TODO
-        ## TODO
-        ## TODO
-#        if ($indel_coordinate > 52520000) {
-#            last;
-#        }
         if ($positions) {
-#            if (!defined($positions->{$seq_region}->{$indel_coordinate}) and
-#                !defined($positions->{$seq_region}->{$indel_coordinate-1}) and
-#                !defined($positions->{$seq_region}->{$indel_coordinate+1})
-#                ) {
             if (!defined($positions->{$seq_region}->{$indel_coordinate})) {
                 next;
             }
         }
 
         print OUTPUT join("\t", $seq_region, $indel_coordinate, $next_nucl, (substr($anc_fasta, $indel_coordinate-1, 1) or "?"), "s;");
-        
-#        if ($positions) {
-#            if (!defined($positions->{$seq_region}->{$indel_coordinate})
-#                and !defined($positions->{$seq_region}->{$indel_coordinate-1})
-#                and !defined($positions->{$seq_region}->{$indel_coordinate+1})
-#                ) {
-#                print "\n"; # Finish the line
-#                next;
-#            }
-#        }
         
 #        print join("\t", $seq_region, $indel_coordinate, substr($anc_fasta, $indel_coordinate-1, 1), "s;");
         
@@ -392,15 +502,6 @@ sub infer_ancestral_alleles_for_this_sorted_alignment {
         ## }
         
         my $reference_ortheus_alignment = run_ortheus($sub_sorted_alignment, $ortheus_exe, $muscle_exe, $work_dir, $verbose);
-
-        ## TODO
-        ## TODO: Print the output to a file
-        ## TODO
-        ## TODO
-        ## TODO
-        ## TODO
-        ## TODO
-        ## TODO
 
         
         #####################################################################
