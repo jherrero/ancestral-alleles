@@ -14,14 +14,14 @@ my $low_complexity_flank = "ACACACACAC";
 subtest "get_reference_sequence_exception" => sub {
     
     ## get_reference_sequence_excpetion($flank5, $flank3, $alignment_length, $max_alignment_length);
-    is(get_reference_sequence_exception($normal_flank, $normal_flank, 10, 100), undef);
-    isnt(get_reference_sequence_exception($normal_flank, $normal_flank, 101, 100), undef);
-    isnt(get_reference_sequence_exception($all_N_flank, $normal_flank, 10, 100), undef);
-    isnt(get_reference_sequence_exception($normal_flank, $all_N_flank, 10, 100), undef);
-    isnt(get_reference_sequence_exception($all_N_flank, $all_N_flank, 10, 100), undef);
-    isnt(get_reference_sequence_exception($low_complexity_flank, $normal_flank, 10, 100), undef);
-    isnt(get_reference_sequence_exception($normal_flank, $low_complexity_flank, 10, 100), undef);
-    isnt(get_reference_sequence_exception($low_complexity_flank, $low_complexity_flank, 10, 100), undef);
+    is(get_reference_sequence_exception($normal_flank, $normal_flank, 10, 100, "/tmp/"), undef);
+    isnt(get_reference_sequence_exception($normal_flank, $normal_flank, 101, 100, "/tmp/"), undef);
+    isnt(get_reference_sequence_exception($all_N_flank, $normal_flank, 10, 100, "/tmp/"), undef);
+    isnt(get_reference_sequence_exception($normal_flank, $all_N_flank, 10, 100, "/tmp/"), undef);
+    isnt(get_reference_sequence_exception($all_N_flank, $all_N_flank, 10, 100, "/tmp/"), undef);
+    isnt(get_reference_sequence_exception($low_complexity_flank, $normal_flank, 10, 100, "/tmp/"), undef);
+    isnt(get_reference_sequence_exception($normal_flank, $low_complexity_flank, 10, 100, "/tmp/"), undef);
+    isnt(get_reference_sequence_exception($low_complexity_flank, $low_complexity_flank, 10, 100, "/tmp/"), undef);
 };
 
 
@@ -733,15 +733,16 @@ subtest 'complex splice tree' => sub {
 subtest 'Bug in extracting the flanks (1)' => sub {
     
     my $reference_ortheus_alignment = {
-        'ref' => { 'aligned_sequence' => "TGAAGTGCCT-GGTCAGCTT" },
-        'sis' => { 'aligned_sequence' => "TGAAGTGCCT-GGTCAGCTT" },
-        'anc' => { 'aligned_sequence' => "TGAAGTGCCT-GGTCAGCTT" },
-        'old' => { 'aligned_sequence' => "TGAAGTGCCT-GGTCAGCTT" },
+        'ref' => { 'aligned_sequence' => "TGAAGTGCCT-GGTCAGCTTA" },
+        'sis' => { 'aligned_sequence' => "TGAAGTGCCT-GGTCAGCTTA" },
+        'anc' => { 'aligned_sequence' => "TGAAGTGCCT-GGTCAGCTTA" },
+        'old' => { 'aligned_sequence' => "TGAAGTGCCT-GGTCAGCTTA" },
     };
     BaseAncestralAlleles::get_alleles_for_insertion($reference_ortheus_alignment, 10, "A");
     BaseAncestralAlleles::get_alleles_for_insertion($reference_ortheus_alignment, 10, "C");
     BaseAncestralAlleles::get_alleles_for_insertion($reference_ortheus_alignment, 10, "T");
     BaseAncestralAlleles::get_alleles_for_insertion($reference_ortheus_alignment, 10, "G");
+    pass();
 };
 
 
