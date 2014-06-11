@@ -44,3 +44,6 @@ Credits
 This repository contains a re-write of the code initiated by Kathryn Beal while
 at the European Bioinformatics Institute (http://www.ebi.ac.uk). This was done
 under the supervision of Javier Herrero, in Paul Flicek's group.
+
+The original files can be found in the Ensembl Compara repository, under
+modules/Bio/EnsEMBL/Compara/RunnableDB/AncestralAllelesForIndels 
