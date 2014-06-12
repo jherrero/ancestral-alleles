@@ -3,6 +3,86 @@ package BaseAncestralAlleles;
 use strict;
 use warnings;
 
+=pod
+
+=head1 MODULE
+
+BaseAncestralAlleles
+
+=head1 DESCRIPTION
+
+This module contain the internal methods used for polarising indels in a genome. It is meant to be used as a BASE class for
+the RunAncestralAlleles* modules. These will handle the input and output layer.
+
+=head1 Exported methods
+
+This module exports by default the following methods:
+
+=over
+
+=item straighten_sorted_alignment
+
+=item get_name_from_data
+
+=item get_sub_sorted_alignment
+
+=item splice_uninformative_sequences_from_alignment
+
+=item get_reference_sequence_exception
+
+=item run_ortheus
+
+=item call_ancestral_allele_for_deletion
+
+=item call_ancestral_allele_for_insertion
+
+=back
+
+=head1 INTERNAL DATA STRUCTURES
+
+=head2 SORTED_ALIGNMENT
+
+ This is used for the original and sub-EMF alignments. It is a hash with 3 keys:
+ - tree:      a string representation of the sequence tree, with no names for the ancestral sequences
+ - positions: defines the order of the sequences in the tree (required for running Ortheus)
+ - sequences: a sorted array (see positions) of hashes whose keys are:
+      - species:  the species name
+      - chr:      the chromosome (or similar) name
+      - start:    the start position in that chromosome (e! coordinates)
+      - end:      the end position in that chromosomes (e! coordinates)
+      - strand:   the strand of the sequence (1 or -1)
+      - name:     a label representation of the above, as found in the tree lines of the EMF files (i.e. Hsap_1_12345_22345[+])
+      - aligned_sequence:     self-explanatory. Might not exist if the sequence is to be aligned.
+      - original_sequence:    self-explanatory. Might not exist if the sequence is already aligned.
+
+=head2 ORTHEUS_ALIGNMENT
+
+ This is used for capturing the Ortheus alignments. It is a hash, where each entry is one of the sequences from Ortheus.
+ The key is the name of the sequence "a la Ortheus" (concatenation of the sequence numbers with an "_"), but with sorted
+ leave names. Additionally, the parser also calls "ref", "sis", "anc" and "old" as aliases for the corresponding sequences.
+ The values are a hash whose keys are:
+ - leaves:            a hash with keys being the leaf names and values being simply 1. Useful to match leaf content.
+ - num_leaves:        the number of leaves under that tree. 1 for leaves, more for ancestral nodes.
+ - aligned_sequence:  self-explanatory
+ - name:              the same label as for the SORTED_ALIGNMENT for leaves. Concatenation of labels these otherwise.
+
+ Note: after the calling of alleles, the ortheus_alignment contain a new key-value pair with the lengths of the flank5, allele and flank3
+
+=head2 TREES
+
+ The trees are represented as a nested set of tree nodes. The keys are:
+ - children: an arrayref to a set of other tree nodes
+ - distance_to_parent: a number representing the distance to the parent node in the tree
+ - label: a string representing the name of this node (only for leaves)
+ - mark: additional flag used when trimming the trees
+
+=head1 INTERNAL METHODS
+
+The rest of the documentation refers to the internal methods implemented in this module.
+
+=cut
+
+
 use Exporter 'import';
 
 our @EXPORT = qw(
@@ -695,18 +775,55 @@ sub splice_sequence_from_sorted_alignment {
 }
 
 
-##############################################################################################
-##############################################################################################
+##########################################################################################
+##########################################################################################
 ##
 ## TREE PARSING AND EDITING METHODS
 ##
-##############################################################################################
-##############################################################################################
+##########################################################################################
+##########################################################################################
 
 =head1 Tree parsing and editing methods
 
 =cut
 
+
+=head2 splice_tree
+ 
+ Arg[1]:        $tree
+ Arg[2]:        string $leaf_name
+ Returns:       $spliced_tree
+ Description:   This method splices the leaf $leaf_name from the input $tree.
+                It edits the parent node of the removed leaf to avoid returning
+                a tree with an internal node that has just one child:
+
+                       o                 o               o
+                      / \               / \             / \
+                     /   \             /   \           /   \
+                    o     o    ==>    o     o   ==>   o     \
+                   / \   / \         / \     \       / \     \
+                  o   o X   o       o   o     o     o   o     o
+
+                If the leaf to be removed is the only other child of the root
+                node, the method will return a tree whose root is the root of
+                the remaining tree.
+
+                        o                 o
+                       / \                 \                o
+                      /   o                 o              / \
+                     /   / \     ==>       / \    ==>     o   \
+                    /   o   \             o   \          / \   \
+                   /   / \   \           / \   \        o   o   o
+                  x   o   o   o         o   o   o
+
+                The method works by first calling mark_node() to identify the leaf to be
+                removed as well as its parent node. The trim_tree() method is then used to
+                edit the tree accordingly.
+
+                This method is usually called from the
+                splice_sequence_from_sorted_alignment() method.
+
+=cut
 
 sub splice_tree {
     my ($tree, $leaf_name) = @_;
@@ -718,6 +835,26 @@ sub splice_tree {
     
     return $tree;
 }
+
+
+=head2 trim_tree
+
+ Arg[1]:        $tree_node
+ Returns:       $tree_node
+ Description:   This method traverses the tree recursively looking for the node marked
+                with a value of 2 (parent node of the leaf to be trimmed, see mark_node()
+                and splice_tree()). It assumes that the tree is binary, at least for this
+                particular node.
+                
+                It removes the leaf node to be trimmed and modifies its distance-to-parent
+                for its later re-connection to its grand-father node. This is preformed as
+                part of the recursivity of the method. The method returns the current node
+                except after trimming the parent and leaf node in which case it returns
+                the sister node (with its modified distance-to-parent). In each loop, the
+                children of the internal nodes are re-connected to the returned value of
+                the previous loop, resulting in the expected trimmed tree.
+
+=cut
 
 sub trim_tree {
     ## Marks are:
@@ -750,6 +887,19 @@ sub trim_tree {
     return $node;
 }
 
+
+=head2 mark_node
+
+ Arg[1]:        $tree_node
+ Arg[2]:        string $leaf_name
+ Returns:       int $mark (1 if node is leaf, 0 otherwise)
+ Description:   This method traverses the tree recursively to find the leaf identified by
+                its name. When this happens, the method marks the node with $node->{mark}
+                = 1 and returns 1, signalling to the parent node that it is the parent
+                node. The parent node is marked with a value of 2.
+
+=cut
+
 sub mark_node {
     ## Marks are:
     ## 1 - leaf node at position $leaf_position
@@ -775,6 +925,16 @@ sub mark_node {
         return 0;
     }
 }
+
+
+=head2 parse_newick
+
+ Arg[1]:        string $newick_tree
+ Returns:       hashref $tree_node
+ Description:   This method reads the newick tree string recursively and creates a nested
+                set of $tree_nodes that represent the tree.
+
+=cut
 
 sub parse_newick {
     my ($newick) = @_;
@@ -829,6 +989,17 @@ sub parse_newick {
     }
 }
 
+
+=head2 tree_to_string
+
+ Arg[1]:        hashref $tree_node
+ Returns:       string $newick_tree
+ Description:   This method converts a nested set of tree_nodes into a newick string. It
+                calls the node_to_string() method recursively and add a semi-colon (;) at
+                the end of the string.
+
+=cut
+
 sub tree_to_string {
     my ($tree) = @_;
     
@@ -836,6 +1007,18 @@ sub tree_to_string {
     
     return $string;
 }
+
+
+=head2 node_to_string
+
+ Arg[1]:        hashref $tree_node
+ Returns:       string $newick_node
+ Description:   This method writes a Newick representation of this particular node by
+                traversing all the children (for internal nodes) or printing the node
+                label (for leaves) and prints the distance to the parent node afterwards
+                (when available, in principle always but for the root node).
+
+=cut
 
 sub node_to_string {
     my ($node) = @_;
