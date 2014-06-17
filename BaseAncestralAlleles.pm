@@ -42,39 +42,84 @@ This module exports by default the following methods:
 
 =head2 SORTED_ALIGNMENT
 
- This is used for the original and sub-EMF alignments. It is a hash with 3 keys:
- - tree:      a string representation of the sequence tree, with no names for the ancestral sequences
- - positions: defines the order of the sequences in the tree (required for running Ortheus)
- - sequences: a sorted array (see positions) of hashes whose keys are:
-      - species:  the species name
-      - chr:      the chromosome (or similar) name
-      - start:    the start position in that chromosome (e! coordinates)
-      - end:      the end position in that chromosomes (e! coordinates)
-      - strand:   the strand of the sequence (1 or -1)
-      - name:     a label representation of the above, as found in the tree lines of the EMF files (i.e. Hsap_1_12345_22345[+])
-      - aligned_sequence:     self-explanatory. Might not exist if the sequence is to be aligned.
-      - original_sequence:    self-explanatory. Might not exist if the sequence is already aligned.
+This is used for the original and sub-EMF alignments. It is a hash with 3 keys:
+
+=over
+
+=item * B<tree>:      a string representation of the sequence tree, with no names for the
+ancestral sequences
+
+=item * B<positions>: defines the order of the sequences in the tree (required for running
+Ortheus)
+
+=item * B<sequences>: a sorted array (see positions) of hashes whose keys are:
+
+=over
+
+=item * B<species>: the species name
+
+=item * B<chr>: the chromosome (or similar) name
+
+=item * B<start>: the start position in that chromosome (e! coordinates)
+
+=item * B<end>: the end position in that chromosomes (e! coordinates)
+
+=item * B<strand>: the strand of the sequence (1 or -1)
+
+=item * B<name>: a label representation of the above, as found in the tree lines of the
+EMF files (i.e. Hsap_1_12345_22345[+])
+
+=item * B<aligned_sequence>: self-explanatory. Might not exist if the sequence is to be
+aligned.
+
+=item * B<original_sequence>: self-explanatory. Might not exist if the sequence is already
+aligned.
+=back
+
+=back
 
 =head2 ORTHEUS_ALIGNMENT
 
- This is used for capturing the Ortheus alignments. It is a hash, where each entry is one of the sequences from Ortheus.
- The key is the name of the sequence "a la Ortheus" (concatenation of the sequence numbers with an "_"), but with sorted
- leave names. Additionally, the parser also calls "ref", "sis", "anc" and "old" as aliases for the corresponding sequences.
- The values are a hash whose keys are:
- - leaves:            a hash with keys being the leaf names and values being simply 1. Useful to match leaf content.
- - num_leaves:        the number of leaves under that tree. 1 for leaves, more for ancestral nodes.
- - aligned_sequence:  self-explanatory
- - name:              the same label as for the SORTED_ALIGNMENT for leaves. Concatenation of labels these otherwise.
+This is used for capturing the Ortheus alignments. It is a hash, where each entry is one
+of the sequences from Ortheus. The key is the name of the sequence "a la Ortheus"
+(concatenation of the sequence numbers with an "_"), but with sorted leave names.
+Additionally, the parser also calls "ref", "sis", "anc" and "old" as aliases for the
+corresponding sequences. The values are a hash whose keys are:
 
- Note: after the calling of alleles, the ortheus_alignment contain a new key-value pair with the lengths of the flank5, allele and flank3
+=over
+
+=item * B<leaves>: a hash with keys being the leaf names and values being simply 1.
+Useful to match leaf content.
+
+=item * B<num_leaves>: the number of leaves under that tree. 1 for leaves, more for
+ancestral nodes.
+
+=item * B<aligned_sequence>: self-explanatory
+
+=item * B<name>: the same label as for the SORTED_ALIGNMENT for leaves. Concatenation
+of labels these otherwise.
+
+=back
+
+B<Note>: after the calling of alleles, the ortheus_alignment contain a new key-value pair
+with the lengths of the flank5, allele and flank3
 
 =head2 TREES
 
- The trees are represented as a nested set of tree nodes. The keys are:
- - children: an arrayref to a set of other tree nodes
- - distance_to_parent: a number representing the distance to the parent node in the tree
- - label: a string representing the name of this node (only for leaves)
- - mark: additional flag used when trimming the trees
+The trees are represented as a nested set of tree nodes. The keys are:
+
+=over
+
+=item * B<children>: an arrayref to a set of other tree nodes
+
+=item * B<distance_to_parent>: a number representing the distance to the parent node in
+the tree
+
+=item * B<label>: a string representing the name of this node (only for leaves)
+
+=item * B<mark>: additional flag used when trimming the trees
+
+=back
 
 =head1 INTERNAL METHODS
 
@@ -106,6 +151,19 @@ our %event_type = (
     'unsure' => 7);
 
 
+=head2 get_name_from_data
+
+ Arg[1]:        string $species
+ Arg[2]:        string $chromosome
+ Arg[3]:        int $start
+ Arg[4]:        int $end
+ Arg[5]:        int $strand (1 or -1)
+ Returns:       string $name
+ Description:   Helper method to build a name string that describe the location of this
+                locus.
+
+=cut
+
 sub get_name_from_data {
     my ($species, $chromosome, $start, $end, $strand) = @_;
     
@@ -117,6 +175,27 @@ sub get_name_from_data {
 }
 
 
+=head2 get_reference_sequence_exception
+
+ Arg[1]:        string $flank5
+ Arg[2]:        string $flank3
+ Arg[3]:        int $alignment_length
+ Arg[4]:        int $max_alignment_length
+ Arg[5]:        string $work_dir
+ Arg[6]:        bool $verbose
+ Returns:       string $EXCEPTION or undef
+ Description:   This method runs several check on the sequence and original alignment.
+                This is intended to be run before attempting to align the reference or
+                indel alleles. The checks this runs are:
+                - the aligned sequence is longer than $max_alignment_length
+                    (exception: LONG_INSERTION)
+                - either $flank5 or $flank3 are all N's (exception: ALL_N)
+                - either $flank5 or $flank3 contains just one different nucleotide
+                    (exception: LOW_COMPLEXITY (HR))
+                - the complexity of the reference sequence is too low (see check_
+                    complexity_of_sequence(), exception: LOW_COMPLEXITY (muscle...))
+
+=cut
 
 sub get_reference_sequence_exception {
     my ($flank5, $flank3, $alignment_length, $max_alignment_length, $work_dir, $verbose) = @_;
@@ -149,40 +228,79 @@ sub get_reference_sequence_exception {
 }
 
 
-sub check_complexity_of_sequence {
-    my ($flank, $work_dir) = @_;
-    
-    $flank =~ s/\-//g;
-#    $flank = substr($flank, 1, -1);
-    $flank = substr($flank, 2, -2);
-#    $flank = substr($flank, 3, -3);
+=head2 check_complexity_of_sequence
 
-    my $muscle_in = "$work_dir/flank.fa";
+ Arg[1]:        string $locus_sequence
+ Arg[2]:        string $work_dir
+ Returns:       string "LOW_COMPLEXITY..." or undef
+ Description:   This method checks the complexity of this sequence by aligning it to
+                itself after offsetting the sequence by 2, 3 or 4 nucleotides. This is an
+                pragmatic way to look for STR that would affect the quality of the ortheus
+                alignment if present. If order to increase the specificity, the $locus_
+                sequence is truncated by 2 nucleotides each end before checking running
+                the alignments.
+
+                The alignments are run using muscle. When the resulting alignment produces
+                a number of matches that is larger than the length of the aligned sequences
+                minus 3, this sequence is considered to have a low complexity.
+
+                This method is called by get_reference_sequence_exception().
+=cut
+
+sub check_complexity_of_sequence {
+    my ($locus_sequence, $work_dir) = @_;
     
+## TODO: muscle path is hard-coded here
+
+    $locus_sequence =~ s/\-//g;
+    $locus_sequence = substr($locus_sequence, 2, -2);
+
+    my $muscle_in = "$work_dir/locus.fa";
+
     for (my $offset = 2; $offset <= 4; $offset++) {
         open(MUSCLE, ">$muscle_in") or die();
-        print MUSCLE ">locus1.$offset\n", substr($flank, $offset), "\n";
-        print MUSCLE ">locus2.$offset\n", substr($flank, 0, -$offset), "\n";
+        print MUSCLE ">locus1.$offset\n", substr($locus_sequence, $offset), "\n";
+        print MUSCLE ">locus2.$offset\n", substr($locus_sequence, 0, -$offset), "\n";
         close(MUSCLE);
         my $muscle_cmd = "muscle -maxiters 10 -diags -in $muscle_in -quiet";
         my @muscle_lines = qx"$muscle_cmd";
-        if ($muscle_lines[1] ne ("-"x$offset).substr($flank, $offset)."\n" or
-            $muscle_lines[3] ne substr($flank, 0, -$offset).("-"x$offset)."\n") {
+        if ($muscle_lines[1] ne ("-"x$offset).substr($locus_sequence, $offset)."\n" or
+            $muscle_lines[3] ne substr($locus_sequence, 0, -$offset).("-"x$offset)."\n") {
                 my $num_matches = 0;
                 for (my $pos = 0; $pos < length($muscle_lines[1])-1; $pos++) {
                     $num_matches++ if (substr($muscle_lines[1], $pos, 1) eq substr($muscle_lines[3], $pos, 1));
                 }
-                if ($num_matches > length($flank) - $offset - 3) {
-#                if ($num_matches > length($flank) - $offset - 5) {
+                if ($num_matches > length($locus_sequence) - $offset - 3) {
+#                if ($num_matches > length($locus_sequence) - $offset - 5) {
 #                    print "\n", @muscle_lines,"matches:$num_matches\n\n";
                     unlink($muscle_in);
-                    return "LOW_COMPLEXITY (muscle $offset $num_matches ". (length($flank) - $offset - 3). " $flank)";
+                    return "LOW_COMPLEXITY (muscle $offset $num_matches ". (length($locus_sequence) - $offset - 3). " $locus_sequence)";
                 }
             }
     }
     unlink($muscle_in);
     return undef;
 }
+
+
+=head2 run_ortheus
+
+ Arg[1]:        hash $sorted_alignment
+ Arg[2]:        string $ortheus_exe
+ Arg[3]:        string $muscle_exe (optional)
+ Arg[4]:        srting $work_dir
+ Arg[5]:        bool $verbose
+ Returns:       hash $ortheus_alignment
+ Description:   This method runs ortheus on the $sorted_alignment to produce a new $orteus_
+                alignment which includes predicted ancestral sequences. Please refer to
+                C<INTERNAL DATA STRUCTURES> elsewhere in this document.
+
+                You must provide the path to the Ortheus executable (or simply "ortheus"
+                available on the default PATH) and the $work_dir. The path for muscle is
+                optional. If provided, the method will build an initial alignment with
+                muscle to guide ortheus.
+
+=cut
 
 sub run_ortheus {
     my ($sorted_alignment, $ortheus_exe, $muscle_exe, $work_dir, $verbose) = @_;
@@ -301,6 +419,25 @@ sub run_ortheus {
 }
 
 
+=head2 call_ancestral_allele_for_deletion
+
+ Arg[1]:        hashref $ref_alignment
+ Arg[2]:        hashref $deletion_alignment
+ Arg[3]:        string $deletion
+ Arg[4]:        int $flank_length
+ Arg[5]:        bool $verbose
+ Returns:       array with
+                - $ref_allele from the $ref_alignment
+                - $ref_allele from the $insertion_alignment
+                - inferred final $ancestral_allele call,
+                - $indel_call
+ Description:   The method gets the alles for both alignments using the get_alleles_for_
+                deletion() method and makes a call based on these results.
+                In verbose mode, prints both ref and deletion alignment together with the
+                final call.
+
+=cut
+
 sub call_ancestral_allele_for_deletion {
     my ($self, $reference_ortheus_alignment, $deletion_ortheus_alignment, $this_deletion, $flank_length, $verbose) = @_;
     
@@ -365,6 +502,25 @@ sub call_ancestral_allele_for_deletion {
     return (($ref_reference_allele or "-"), ($ref_deletion_allele or "-"), ($ancestral_allele_call or "-"), $indel_call);
 }
 
+
+=head2 call_ancestral_allele_for_insertion
+
+ Arg[1]:        hashref $ref_alignment
+ Arg[2]:        hashref $insertion_alignment
+ Arg[3]:        string $insertion
+ Arg[4]:        int $flank_length
+ Arg[5]:        bool $verbose
+ Returns:       array with
+                - $ref_allele from the $ref_alignment
+                - $ref_allele from the $insertion_alignment
+                - inferred final $ancestral_allele call,
+                - $indel_call
+ Description:   The method gets the alles for both alignments using the get_alleles_for_
+                insertion() method and makes a call based on these results.
+                In verbose mode, prints both ref and insertion alignment together with the
+                final call.
+
+=cut
 
 sub call_ancestral_allele_for_insertion {
     my ($self, $reference_ortheus_alignment, $insertion_ortheus_alignment, $this_insertion, $flank_length, $verbose) = @_;
@@ -620,6 +776,8 @@ sub print_ortheus_alignment {
 
 =head1 Sorted alignment methods
 
+=cut
+
 =head2 straighten_sorted_alignment
  
  Arg[1]:        hashref $sorted_alignment
@@ -711,10 +869,10 @@ sub get_sub_sorted_alignment {
  Description:   Look for empty sequences or sequences containing Ns only and splice them
                 from the alignment. Note that this method looks at the "original_sequence"
                 and not at the "aligned_sequence". This is because this method is used to
-                remove uninfromative sequences from the sub-sorted_alignment before the
+                remove uninformative sequences from the sub-sorted_alignment before the
                 sequences are aligned.
-                This method is remove the uninformative sequences sequentially until they
-                all contain inforamtive nucleotides. The removal of sequences is made via
+                This method removes the uninformative sequences sequentially until they
+                all contain informative nucleotides. The removal of sequences is made via
                 the splice_sequence_from_sorted_alignment method.
 
 =cut
