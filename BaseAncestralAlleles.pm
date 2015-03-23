@@ -133,6 +133,12 @@ use Exporter 'import';
 our @EXPORT = qw(
 straighten_sorted_alignment
 get_name_from_data
+call_ancestral_allele_from_ortheus_alignments
+get_alleles_from_ortheus_alignment
+print_ortheus_alignment
+print_sorted_alignment
+read_sorted_alignment_from_emf_fh
+fix_alignment_tree
 get_sub_sorted_alignment
 splice_uninformative_sequences_from_alignment
 get_reference_sequence_exception
@@ -198,7 +204,7 @@ sub get_name_from_data {
 =cut
 
 sub get_reference_sequence_exception {
-    my ($flank5, $flank3, $alignment_length, $max_alignment_length, $work_dir, $verbose) = @_;
+    my ($flank5, $flank3, $alignment_length, $max_alignment_length, $muscle_exe, $work_dir, $verbose) = @_;
    
     ## EXCEPTION: the alignment is too long
     if ($alignment_length > $max_alignment_length) {
@@ -221,7 +227,13 @@ sub get_reference_sequence_exception {
         return "LOW_COMPLEXITY (HR)";
     }
 
-    my $exception = check_complexity_of_sequence($flank5.$flank3, $work_dir);
+#     my $exception = check_complexity_of_sequence($flank5.$flank3, $work_dir);
+#     return $exception if ($exception);
+
+    my $exception;
+    $exception = check_complexity_of_sequence($flank5, $muscle_exe, $work_dir);
+    return $exception if ($exception);
+    $exception = check_complexity_of_sequence($flank3, $muscle_exe, $work_dir);
     return $exception if ($exception);
 
     return undef;
@@ -248,21 +260,21 @@ sub get_reference_sequence_exception {
 =cut
 
 sub check_complexity_of_sequence {
-    my ($locus_sequence, $work_dir) = @_;
+    my ($locus_sequence, $muscle_exe, $work_dir) = @_;
     
 ## TODO: muscle path is hard-coded here
 
     $locus_sequence =~ s/\-//g;
     $locus_sequence = substr($locus_sequence, 2, -2);
 
-    my $muscle_in = "$work_dir/locus.fa";
+    my $muscle_in = "$work_dir/locus.$$.fa";
 
-    for (my $offset = 2; $offset <= 4; $offset++) {
+    for (my $offset = 2; $offset <= 6; $offset++) {
         open(MUSCLE, ">$muscle_in") or die();
         print MUSCLE ">locus1.$offset\n", substr($locus_sequence, $offset), "\n";
         print MUSCLE ">locus2.$offset\n", substr($locus_sequence, 0, -$offset), "\n";
         close(MUSCLE);
-        my $muscle_cmd = "muscle -maxiters 10 -diags -in $muscle_in -quiet";
+        my $muscle_cmd = "$muscle_exe -maxiters 10 -diags -in $muscle_in -quiet";
         my @muscle_lines = qx"$muscle_cmd";
         if ($muscle_lines[1] ne ("-"x$offset).substr($locus_sequence, $offset)."\n" or
             $muscle_lines[3] ne substr($locus_sequence, 0, -$offset).("-"x$offset)."\n") {
@@ -331,20 +343,24 @@ sub run_ortheus {
     if ($muscle_exe) {
         close(MUSCLE);
         
-        my $muscle_cmd = "muscle -maxiters 1 -diags -in $muscle_in -out $muscle_out";
+        my $muscle_cmd = "$muscle_exe -maxiters 3 -diags -in $muscle_in -out $muscle_out &> /dev/null";
         system($muscle_cmd);
         my @muscle_lines;
         open(MUSCLE, $muscle_out);
+        my $order = -1;
         while (<MUSCLE>) {
+            chomp;
             if (/>(.+)/) {
-                my $order = $muscle_order->{$1};
+                $order = $muscle_order->{$1};
                 $muscle_lines[$order*2] = $_;
-                $muscle_lines[$order*2+1] = <MUSCLE>;
+                $muscle_lines[$order*2+1] = "";
+            } else {
+                $muscle_lines[$order*2+1] .= $_;
             }
         }
         close(MUSCLE);
         open(MUSCLE, ">".$muscle_out);
-        print MUSCLE join("", @muscle_lines);
+        print MUSCLE join("\n", @muscle_lines), "\n";
         close(MUSCLE);
     }
     
@@ -352,15 +368,15 @@ sub run_ortheus {
     my $output_alignment_file = "$work_dir/ortheus.$$.output.mfa";
     my $output_score_file = "$work_dir/ortheus.$$.score.txt";
     
-    my $ortheus_cmd = "$ortheus_exe -b '$tree' -a ".join(" ", @$fasta_filenames)." -i 10 -j 0 -d $output_alignment_file -x $output_score_file";
+    my $ortheus_cmd = "$ortheus_exe -b '$tree' -a ".join(" ", @$fasta_filenames)." -i 100 -j 0 -d $output_alignment_file -x $output_score_file";
     
     my @ortheus_args = ("-b", $tree, "-a", @$fasta_filenames, "-d", $output_alignment_file, "-x", $output_score_file);
     if ($muscle_exe) {
         push(@ortheus_args, "-c", $muscle_out);
         $ortheus_cmd .= " -c $muscle_out";
     }
-#    system($ortheus_exe, @ortheus_args) == 0 or die "system call to ortheus failed (".join(" ", @ortheus_args).": $?";
-    qx"$ortheus_cmd";
+    system($ortheus_exe, @ortheus_args) == 0 or die "system call to ortheus failed (".join(" ", @ortheus_args).": $?";
+#     qx"$ortheus_cmd";
     
     open(MFA, $output_alignment_file) or die "ORTHEUS: $ortheus_cmd\nCannot open <$output_alignment_file>";
     my $sort_code;
@@ -583,6 +599,103 @@ sub call_ancestral_allele_for_insertion {
 }
 
 
+sub call_ancestral_allele_from_ortheus_alignments {
+    my ($reference_ortheus_alignment, $alternate_ortheus_alignment, $flank5_length, $flank3_length, $verbose) = @_;
+
+    my ($ref_reference_allele, $sis_reference_allele, $anc_reference_allele, $old_reference_allele) =
+            get_alleles_from_ortheus_alignment($reference_ortheus_alignment, $flank5_length, $flank3_length);
+    my ($ref_alternate_allele, $sis_alternate_allele, $anc_alternate_allele, $old_alternate_allele) =
+            get_alleles_from_ortheus_alignment($alternate_ortheus_alignment, $flank5_length, $flank3_length);
+
+    if ($verbose) {
+        print VERBOSE join(" -- ", $ref_reference_allele, $sis_reference_allele, $anc_reference_allele, ($old_reference_allele or "")), "\n";
+        print VERBOSE join(" :: ", $ref_alternate_allele, $sis_alternate_allele, $anc_alternate_allele, ($old_alternate_allele or "")), "\n";
+    }
+
+    my $ancestral_allele_call = $anc_reference_allele;
+    my $indel_call = "";
+    if (uc($anc_reference_allele) eq uc($anc_alternate_allele)) {
+        if (uc($anc_reference_allele) eq uc($ref_reference_allele)) {
+            $indel_call = "DERIVED";
+        } elsif (uc($anc_reference_allele) eq uc($ref_alternate_allele)) {
+            $indel_call = "ANCESTRAL";
+        } elsif (length($anc_reference_allele) == length($ref_reference_allele)) {
+            $indel_call = "DERIVED (complex)";
+        } elsif (length($anc_reference_allele) == length($ref_alternate_allele)) {
+            $indel_call = "ANCESTRAL (complex)";
+        } else {
+            $indel_call = "CRYPTIC";
+        }
+    } else {
+        $ancestral_allele_call = "?";
+        $indel_call = "unsure";
+    }
+
+    return (($ref_reference_allele or "-"), ($ref_alternate_allele or "-"), ($ancestral_allele_call or "-"), $indel_call);
+}
+
+=head2 get_alleles_from_ortheus_alignment
+ 
+ 
+=cut
+
+sub get_alleles_from_ortheus_alignment {
+    my ($ortheus_alignment, $flank5_length, $flank3_length) = @_;
+
+    my $ref_aligned_seq = $ortheus_alignment->{"ref"}->{aligned_sequence};
+    my ($flank5, $allele, $flank3) = $ortheus_alignment->{"ref"}->{aligned_sequence} =~ /((?:\-*[a-zA-Z]){$flank5_length})(.*)((?:[a-zA-Z]\-*){$flank3_length})$/;
+    if (!$flank5 or !$flank3) {
+        print_ortheus_alignment($ortheus_alignment);
+        die "Cannot extract the flanks from sequence: ".$ortheus_alignment->{"ref"}->{aligned_sequence};
+    }
+#     print $ref_aligned_seq, "\n";
+#     print join("", $flank5, $allele, $flank3), "\n";
+#     print join(":", $flank5, $allele, $flank3), "\n";
+
+#     $flank5 =~ s/\-*($allele\-*)+$//g;
+#     my $length_flank5 = length($flank5);
+#     $flank3 =~ s/^(\-*$allele)+\-*//g;
+#     my $length_flank3 = length($flank3);
+#     my $length_allele = length($ortheus_alignment->{"ref"}->{aligned_sequence}) - $length_flank5 - $length_flank3;
+
+
+    my $length_flank5 = length($flank5);
+    my $length_allele = length($allele);
+    my $length_flank3 = length($flank3);
+    $ortheus_alignment->{"lengths"} = [$length_flank5, $length_allele, $length_flank3];
+
+    my $ref_allele = substr($ortheus_alignment->{"ref"}->{aligned_sequence}, $length_flank5, $length_allele);
+    my $sis_allele = substr($ortheus_alignment->{"sis"}->{aligned_sequence}, $length_flank5, $length_allele);
+    my $anc_allele = substr($ortheus_alignment->{"anc"}->{aligned_sequence}, $length_flank5, $length_allele);
+    my $old_allele;
+    if ($ortheus_alignment->{"old"}) {
+        $old_allele = substr($ortheus_alignment->{"old"}->{aligned_sequence}, $length_flank5, $length_allele);
+    }
+    for (my $pos = 0; $pos < length($anc_allele); $pos++) {
+        my $anc = substr($anc_allele, $pos, 1);
+        my $sis = substr($sis_allele, $pos, 1);
+        my $old = "";
+        if ($old_allele) {
+            $old = substr($old_allele, $pos, 1);
+        }
+        if ($anc eq $sis and $anc eq $old) {
+            $anc = uc($anc)
+        } elsif ($anc eq $sis or $anc eq $old) {
+            $anc = lc($anc);
+        } else {
+            $anc = "?";
+        }
+        substr($anc_allele, $pos, 1, $anc);
+    }
+
+    $ref_allele =~ s/\-//g;
+    $sis_allele =~ s/\-//g;
+    $anc_allele =~ s/\-//g;
+    $old_allele =~ s/\-//g if ($old_allele);
+    
+    return($ref_allele, $sis_allele, $anc_allele, $old_allele);
+}
+
 =head2 get_alleles_for_deletion
  
  Arg[1]:        hashref $ortheus_alignment
@@ -744,14 +857,18 @@ sub get_alleles_for_insertion {
 =cut
 
 sub print_ortheus_alignment {
-    my ($ortheus_alignment) = @_;
+    my ($ortheus_alignment, $fh) = @_;
     
+    if (!$fh) {
+        $fh = *STDOUT;
+    }
+
     foreach my $seq (sort {length($a) <=> length($b) || ($a =~ /^(\d+)/)[0] <=> ($b =~ /^(\d+)/)[0]} grep {!/^ref|sis|anc|old|lengths$/} keys %$ortheus_alignment) {
         if ($ortheus_alignment->{"lengths"}) {
             my $pattern = join("", map {"(.{".$_."})"} @{$ortheus_alignment->{"lengths"}});
-            print "SEQ ", join(" | ", ($ortheus_alignment->{$seq}->{aligned_sequence} =~ /$pattern/)), " $seq ", ($ortheus_alignment->{$seq}->{name} or ""), "\n";
+            print $fh "SEQ ", join(" | ", ($ortheus_alignment->{$seq}->{aligned_sequence} =~ /$pattern/)), " $seq ", ($ortheus_alignment->{$seq}->{name} or ""), "\n";
         } else {
-            print "SEQ ", $ortheus_alignment->{$seq}->{aligned_sequence}, " $seq ", ($ortheus_alignment->{$seq}->{name} or ""), "\n";
+            print $fh "SEQ ", $ortheus_alignment->{$seq}->{aligned_sequence}, " $seq ", ($ortheus_alignment->{$seq}->{name} or ""), "\n";
         }
     }
     
@@ -759,9 +876,9 @@ sub print_ortheus_alignment {
         next if (!$ortheus_alignment->{$seq});
         if ($ortheus_alignment->{"lengths"}) {
             my $pattern = join("", map {"(.{".$_."})"} @{$ortheus_alignment->{"lengths"}});
-            print "$seq ", join(" | ", ($ortheus_alignment->{$seq}->{aligned_sequence} =~ /$pattern/)), "\n";
+            print $fh "$seq ", join(" | ", ($ortheus_alignment->{$seq}->{aligned_sequence} =~ /$pattern/)), "\n";
         } else {
-            print "$seq ", $ortheus_alignment->{$seq}->{aligned_sequence}, "\n";
+            print $fh "$seq ", $ortheus_alignment->{$seq}->{aligned_sequence}, "\n";
         }
     }
 }
@@ -777,6 +894,106 @@ sub print_ortheus_alignment {
 =head1 Sorted alignment methods
 
 =cut
+
+sub print_sorted_alignment {
+    my ($sorted_alignment) = @_;
+
+    print "TREE: ", $sorted_alignment->{tree}, "\n";
+    print "POSI: ", join(", ", @{$sorted_alignment->{positions}}), "\n";
+    foreach my $seq (@{$sorted_alignment->{sequences}}) {
+        if ($seq->{aligned_sequence}) {
+            if (length($seq->{aligned_sequence}) < 50) {
+                print $seq->{aligned_sequence}, " ", $seq->{name}, "\n";
+            } else {
+                print substr($seq->{aligned_sequence}, 0, 50), " ", $seq->{name}, "\n";
+            }
+        } elsif ($seq->{original_sequence}) {
+            if (length($seq->{original_sequence}) < 30) {
+                printf("%-30s %s\n", $seq->{original_sequence}, $seq->{name});
+            } else {
+                printf("%30s %s\n", substr($seq->{original_sequence}, 0, 50), $seq->{name});
+            }
+        }
+    }
+    print "\n";
+}
+
+sub read_sorted_alignment_from_emf_fh {
+    my ($emf_fh) = @_;
+
+    my $sorted_alignment = undef;
+    my $pattern = "";
+    while (<$emf_fh>) {
+        if (/^SEQ (.+)/) {
+            my $info = $1;
+            my ($species, $chromosome, $start, $end, $strand) =  $info =~ /(\S+)\s(\S+)\s(\S+)\s(\S+)\s(\S+)/;
+            if ($species eq "ancestral_sequences") {
+                # Match but don't store the sequence for the ancestral sequences
+                $pattern .= " ?\\S";
+            } else {
+                my $name = get_name_from_data($species, $chromosome, $start, $end, $strand);
+
+                push(@{$sorted_alignment->{sequences}}, {species=>$species, chr=>$chromosome, start=>$start, end=>$end, strand=>$strand, name=>$name});
+                # Match and store the sequence for the extant sequences
+                $pattern .= " ?(\\S)";
+            }
+        } elsif ($_ =~ /^SCORE/) {
+            # Match but don't store the score
+            $pattern .= " \-?[\\d\.]+";
+        } elsif (/^TREE (.+)/) {
+            my $tree = $1;
+            $tree =~ s/\:0([^\.])/:0.0001$1/g;
+            $tree =~ s/Aseq_Ancestor_[\d_]+\[.\]//g;
+            $sorted_alignment->{tree} = $tree;
+        } elsif (/^DATA/) {
+            while(<$emf_fh>) {
+                my @this_line = uc($_) =~ /$pattern/;
+                for (my $i=0; $i<@this_line; $i++) {
+                    $sorted_alignment->{sequences}->[$i]->{aligned_sequence} .= $this_line[$i];
+                }
+                
+                last if (/\/\//);
+            }
+
+            # Fix the tree.
+            fix_alignment_tree($sorted_alignment);
+
+            last;
+        }
+    }
+
+    return $sorted_alignment;
+}
+
+
+=head2 fix_alignment_tree
+
+This method modifies the tree string extracted from the EMF file. It also capture the order in which the sequences are
+listed on the tree. This is required by Ortheus as it relies on the order of the input files matching the order of the
+leaves in the input tree.
+
+The modified tree is stored back in the $sorted_alignment->{tree} variable and a new variable ($sorted_alignment->{positions})
+contains an array with the positions of each sequence in the tree string.
+
+=cut
+
+sub fix_alignment_tree {
+    my ($sorted_alignment) = @_;
+    
+    my $tree = $sorted_alignment->{tree};
+    
+    for (my $i = 0; $i < @{$sorted_alignment->{sequences}}; $i++) {
+        my $name = $sorted_alignment->{sequences}->[$i]->{name};
+        $tree =~ s/\Q$name\E/$i/g;
+    }
+
+    my @positions = ($tree =~ /(\d+)\:/g);
+    
+    $sorted_alignment->{tree} = $tree;
+    
+    $sorted_alignment->{positions} = \@positions;
+}
+
 
 =head2 straighten_sorted_alignment
  

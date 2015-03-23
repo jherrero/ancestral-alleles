@@ -181,6 +181,23 @@ sub fetch_input {
         $self->param("positions", $positions);
     }
     
+    if ($self->param_is_defined('tsv')) {
+        my $tsv_file = $self->param('tsv');
+        
+        my $positions;
+        if ($tsv_file =~ /.bz2$/) {
+            open(TSV, "bunzip2 -c $tsv_file |") or die "Cannot open tsv file $tsv_file";
+        } else {
+            open(TSV, $tsv_file) or die "Cannot open tsv file $tsv_file";
+        }
+        while (<TSV>) {
+            my ($sample, $type, $chr, $start, $end, $ref_allele, $alt_allele) = split("\t", $_);
+            $positions->{$chr}->{$start} = 1;
+        }
+        close(TSV);
+        $self->param("positions", $positions);
+    }
+    
     if ($self->param_is_defined('out')) {
         open(OUTPUT, '>', $self->param('out')) or die;
     } else {
@@ -309,35 +326,6 @@ sub write_output {
 }
 
 
-=head2 fix_alignment_tree
-
-This method modifies the tree string extracted from the EMF file. It also capture the order in which the sequences are
-listed on the tree. This is required by Ortheus as it relies on the order of the input files matching the order of the
-leaves in the input tree.
-
-The modified tree is stored back in the $sorted_alignment->{tree} variable and a new variable ($sorted_alignment->{positions})
-contains an array with the positions of each sequence in the tree string.
-
-=cut
-
-sub fix_alignment_tree {
-    my ($sorted_alignment) = @_;
-    
-    my $tree = $sorted_alignment->{tree};
-    
-    for (my $i = 0; $i < @{$sorted_alignment->{sequences}}; $i++) {
-        my $name = $sorted_alignment->{sequences}->[$i]->{name};
-        $tree =~ s/\Q$name\E/$i/g;
-    }
-
-    my @positions = ($tree =~ /(\d+)\:/g);
-    
-    $sorted_alignment->{tree} = $tree;
-    
-    $sorted_alignment->{positions} = \@positions;
-}
-
-
 =head2 infer_ancestral_alleles_for_this_sorted_alignment
 
 This is the method that does the hard work. It is called by the run method for each EMF block. Note that it is generic
@@ -430,10 +418,14 @@ sub infer_ancestral_alleles_for_this_sorted_alignment {
         }
     }
     
+    ## $pre_start is the number of pads (-) at the beginning of the reference aligned sequence:
     my $pre_start = length(($sorted_alignment->{sequences}->[$ref_seq]->{aligned_sequence} =~ /^(\-*)/)[0]);
+
+    ## Loop through the whole ref aligned sequence (taking into account the flank length at both ends)
     for (my $i = 0; $i <= $max_position; $i++) {
         my $indel_coordinate = $seq_region_start + $flank_length + $i;
 
+        ## $pre_start is now used to trim the ref aligned sequence from the initial pads
         my ($flank5, $flank3) = substr($sorted_alignment->{sequences}->[$ref_seq]->{aligned_sequence}, $pre_start) =~ /((?:[a-zA-Z]\-*){$flank_length})((?:\-*[a-zA-Z]){$flank_length})/;
         my $alignment_offset = $pre_start;
         my $alignment_length = length($flank5)+length($flank3);
